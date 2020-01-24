@@ -29,6 +29,7 @@ $winrm->execute({
 
 print "STD OUT:\n" . $winrm->response . "\n";
 print "STD ERR:\n" . $winrm->error . "\n";
+print "STD LOG:\n" . $winrm->logger . "\n";    # Optional use
 </pre>
 
 ### Features
