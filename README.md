@@ -1,4 +1,4 @@
-## WinRM-WinRSExec
+## WinRM::WinRSExec
 
 WinRM Perl module.
 
