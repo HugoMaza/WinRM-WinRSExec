@@ -32,10 +32,10 @@ print "STD ERR:\n" . $winrm->error . "\n";
 
 ### Features
 
-- item * Supports HTTP protocol.
+- Supports HTTP protocol.
 
-- item * Supports HTTPS protocol.
+- Supports HTTPS protocol.
 
-- item * Supports Basic Authentication.
+- Supports Basic Authentication.
 
-- item * Supports Kerberos Authentication.
+- Supports Kerberos Authentication.
