@@ -13,7 +13,7 @@ use WinRM::WinRSExec;
 my $winrm = WinRM::WinRSExec->new({
     host            => "WINDOWSADSERVER",
     protocol        => "http",
-    timeout	        => 60,
+    timeout         => 60,
     domain          => 'DOMAIN.LOCAL',
     username        => 'mi.AD.user',
     password        => 'mYp4ssw0rd',
@@ -38,6 +38,4 @@ print "STD ERR:\n" . $winrm->error . "\n";
 
 - Supports Basic Authentication.
 
-- Supports Kerberos Authentication.
-
-- Supports Negotiate Authentication (NTLM).
+- Supports Negotiate Authentication (Kerberos, NTLM).
