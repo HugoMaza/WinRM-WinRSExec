@@ -39,3 +39,5 @@ print "STD ERR:\n" . $winrm->error . "\n";
 - Supports Basic Authentication.
 
 - Supports Kerberos Authentication.
+
+- Supports Negotiate Authentication (NTLM).
