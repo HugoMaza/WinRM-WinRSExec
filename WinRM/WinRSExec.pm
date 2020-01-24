@@ -31,37 +31,40 @@ Based on CURL runs remote commands using Windows Remote Shell (WinRS)
 
 =cut
 
-our $VERSION = '0.1';
+our $VERSION = '0.2';
 
 =head1 VERSION
 
-Version 0.1
+Version 0.2
+
+Adding simple step logs
 
 =cut
 
 =head1 SYNOPSIS
-    
-    use WinRM::WinRSExec;
-    
-    my $winrm = WinRM::WinRSExec->new({
-        host            => "WINDOWSADSERVER",
-        protocol        => "http",
-        timeout	        => 60,
-        domain          => 'DOMAIN.LOCAL',
-        username        => 'mi.AD.user',
-        password        => 'mYp4ssw0rd',
-        kerberos        => 1
-    });
-    
-    my $command = 'PowerShell -Command "&{Get-Host;}"';
-    
-    $winrm->execute({
-        command => $command
-    });
-    
-    print "STD OUT:\n" . $winrm->response . "\n";
-    print "STD ERR:\n" . $winrm->error . "\n";
-
+ 
+ use WinRM::WinRSExec;
+ 
+ my $winrm = WinRM::WinRSExec->new({
+     host            => "WINDOWSADSERVER",
+     protocol        => "http",
+     timeout	        => 60,
+     domain          => 'DOMAIN.LOCAL',
+     username        => 'my.AD.user',
+     password        => 'mYp4ssw0rd',
+     kerberos        => 1
+ });
+ 
+ my $command = 'PowerShell -Command "&{Get-Host;}"';
+ 
+ $winrm->execute({
+     command => $command
+ });
+ 
+ print "STD OUT:\n" . $winrm->response . "\n";
+ print "STD ERR:\n" . $winrm->error . "\n";
+ print "STD LOG:\n" . $winrm->logger . "\n";    # Optional use
+ 
 =cut
 
 use strict;
@@ -105,7 +108,7 @@ WinRM::WinRSExec has the following specs:
 
 =item * Supports Basic Authentication.
 
-=item * Supports Kerberos Authentication.
+=item * Supports Kerberos Authentication (as well as NTLM).
 
 =back
 
@@ -129,8 +132,7 @@ Password of the username being used to login
 
 =item * username (Mandatory for basic Authentication)
 
-Username of the user to authenticate as, must be a local user to the
-remote host. (Default: Administrator)
+Username of the user to authenticate as, may be a local or AD user (Kerberos) from remote host. (Default: Administrator)
 
 =item * path (Optional)
 
@@ -154,6 +156,10 @@ Returns the last response message encountered by a WinRM object
 
 Returns the last error message encountered by a WinRM object
 
+=head2 logger()
+
+Returns simple logs messages collected step by step
+
 =cut
 
 sub execute {
@@ -163,11 +169,13 @@ sub execute {
     # Basic error checking on passed vars
     unless ( $self->{ host } ) {
         $self->{ error } = "Require hostname or IP address of host to connect to.";
+        $self->{ log } .= sysdate() . "Leaving because host is missing" . "\n";
         return;
     }
     unless ( $self->{ kerberos } ) {
         unless ( $self->{ password } ) {
             $self->{ error } = "Require password for $self->{ username } user with Basic Authentication.";
+            $self->{ log } .= sysdate() . "Leaving because password is missing" . "\n";
             return;
         }
     }
@@ -184,24 +192,38 @@ sub execute {
     my $authentication = $self->authentication;
     my $host = $self->host;
     
+    ## LOGS
+    if ( $self->{ kerberos } ) {
+        $self->{ log } .= sysdate() . "Using Kerberos authentication" . "\n";
+    }
+    else {
+         $self->{ log } .= sysdate() . "Using Basic authentication" . "\n";
+    }
+    $self->{ log } .= sysdate() . "Connecting to " . $host . "\n";
+    
+    
     ## Four steps
     foreach my $step ( 'CreateShell', 'ExecuteCommand', 'ReceiveOutput', 'DeleteShell' ) {
+        $self->{ log } .= sysdate() . "Entering to $step step" . "\n";
         $self->{ xmlSend } = $self->$step;
         my $xml = $self->curlResponse;
         
         if ( $step eq 'CreateShell' ) {
             $self->{ MessageID } = $xml->{ 's:Header' }->{ 'a:MessageID' };
             $self->{ ShellId } = $xml->{ 's:Body' }->{ 'rsp:Shell' }->{ 'rsp:ShellId' };
+            $self->{ log } .= sysdate() . "Shell Id gotten: " . $self->{ ShellId } . "\n";
         }
         
         if ( $self->{ ShellId } ) {
             if ( $step eq 'ExecuteCommand' ) {
                 $self->{ CommandId } = $xml->{ 's:Body' }->{ 'rsp:CommandResponse' }->{ 'rsp:CommandId' };
+                $self->{ log } .= sysdate() . "Command Id gotten: " . $self->{ CommandId } . "\n";
             }
         }
         else {
             ## ShellId error
             $self->{ error } = "Can't get Shell Id";
+            $self->{ log } .= sysdate() . "Leaving. Can't get Shell Id" . "\n";
             return;
         }
         
@@ -223,6 +245,7 @@ sub execute {
                 }
                 
                 my $content = $xml->{ 's:Body' }->{ 'rsp:ReceiveResponse' }->{ 'rsp:Stream' };
+                $self->{ log } .= sysdate() . "Getting response" . "\n";
                 
                 foreach my $i ( 0 .. $#{$content} ) {
                     if ( $content->[$i]->{ 'Name' } eq 'stdout' ) {
@@ -235,11 +258,11 @@ sub execute {
             }
         }
         
-        # if ( $step eq 'DeleteShell' ) {
-            # if ( $self->{ state } =~ /CommandState\/Done$/ ) {
-                # print "DELETE OUTPUT:\n" . Dumper($xml->{ 's:Body' }) . "\n";
-            # }
-        # }
+        if ( $step eq 'DeleteShell' ) {
+            if ( $xml->{ 's:Header' }->{ 'a:Action' } =~ /DeleteResponse$/ ) {
+                $self->{ log } .= sysdate() . "Shell Id " . $self->{ ShellId } . " deleted" . "\n";
+            }
+        }
     }
 }
 
@@ -292,6 +315,18 @@ sub authentication {
     return $authentication;
 }
 
+sub logger {
+    my $self = shift;
+    return $self->{ log };
+}
+
+sub sysdate {
+	my @fecha = localtime(time); # sec,min,hour,mday,mon,year,wday,yday ,isdst
+	$fecha[5] += 1900;
+	$fecha[4] ++;
+	@fecha = map { if ($_ < 10) { $_ = "0$_"; } else { $_ } } @fecha;
+	return "$fecha[5]-$fecha[4]-$fecha[3] $fecha[2]:$fecha[1]:$fecha[0]" . ' : ';
+}
 
 sub CreateShell {
     my $self = shift;
@@ -322,15 +357,21 @@ http://schemas.xmlsoap.org/ws/2004/09/transfer/Create
 <wsman:Option Name="WINRS_NOPROFILE">TRUE</wsman:Option>
 <wsman:Option Name="WINRS_CODEPAGE">437</wsman:Option>
 </wsman:OptionSet>
-<wsman:OperationTimeout>PT$timeout.000S</wsman:OperationTimeout>
+<wsman:OperationTimeout>
+PT$timeout.000S
+</wsman:OperationTimeout>
 </s:Header>
 <s:Body>
 <rsp:Shell xmlns:rsp="http://schemas.microsoft.com/wbem/wsman/1/windows/shell">
 <rsp:Environment>
-<rsp:Variable Name="test">1</rsp:Variable>
+<rsp:Variable Name="test">
+1
+</rsp:Variable>
 </rsp:Environment>
 <rsp:InputStreams>stdin</rsp:InputStreams>
-<rsp:OutputStreams>stdout stderr</rsp:OutputStreams>
+<rsp:OutputStreams>
+stdout stderr
+</rsp:OutputStreams>
 </rsp:Shell>
 </s:Body>
 </s:Envelope>
@@ -383,7 +424,6 @@ $ShellId
 <rsp:CommandLine xmlns:rsp="http://schemas.microsoft.com/wbem/wsman/1/windows/shell">
 <rsp:Command>$command</rsp:Command>
 </rsp:CommandLine>
-
 </s:Body>
 </s:Envelope>
 ~;
@@ -416,25 +456,24 @@ http://schemas.microsoft.com/wbem/wsman/1/windows/shell/Receive
 <wsman:MaxEnvelopeSize s:mustUnderstand="true">
 153600
 </wsman:MaxEnvelopeSize>
-<wsa:MessageID>$MessageID</wsa:MessageID>
+<wsa:MessageID>
+$MessageID
+</wsa:MessageID>
 <wsman:Locale xml:lang="en-US" s:mustUnderstand="false" />
-<wsman:ResourceURI 
-xmlns:wsman="http://schemas.dmtf.org/wbem/wsman/1/wsman.xsd">
+<wsman:ResourceURI xmlns:wsman="http://schemas.dmtf.org/wbem/wsman/1/wsman.xsd">
 http://schemas.microsoft.com/wbem/wsman/1/windows/shell/cmd
 </wsman:ResourceURI>
-<wsman:SelectorSet 
-xmlns:wsman="http://schemas.dmtf.org/wbem/wsman/1/wsman.xsd"
-xmlns="http://schemas.dmtf.org/wbem/wsman/1/wsman.xsd">
+<wsman:SelectorSet xmlns:wsman="http://schemas.dmtf.org/wbem/wsman/1/wsman.xsd" xmlns="http://schemas.dmtf.org/wbem/wsman/1/wsman.xsd">
 <wsman:Selector Name="ShellId">
 $ShellId
 </wsman:Selector>
 </wsman:SelectorSet>
-<wsman:OperationTimeout>PT$timeout.000S</wsman:OperationTimeout>
+<wsman:OperationTimeout>
+PT$timeout.000S
+</wsman:OperationTimeout>
 </s:Header>
 <s:Body>
-<rsp:Receive 
-xmlns:rsp="http://schemas.microsoft.com/wbem/wsman/1/windows/shell"
-SequenceId="0">
+<rsp:Receive xmlns:rsp="http://schemas.microsoft.com/wbem/wsman/1/windows/shell" SequenceId="0">
 <rsp:DesiredStream CommandId="$CommandId">
 stdout stderr
 </rsp:DesiredStream>
@@ -453,11 +492,8 @@ sub DeleteShell {
     my $endPoint = $self->host;
     my $timeout = $self->{ timeout };
     
-    my $xml = qq~
-<s:Envelope
-xmlns:s="http://www.w3.org/2003/05/soap-envelope"
-xmlns:wsa="http://schemas.xmlsoap.org/ws/2004/08/addressing"
-xmlns:wsman="http://schemas.dmtf.org/wbem/wsman/1/wsman.xsd">
+    my $xml = qq~<?xml version="1.0" encoding="UTF-8"?>
+<s:Envelope xmlns:s="http://www.w3.org/2003/05/soap-envelope" xmlns:wsa="http://schemas.xmlsoap.org/ws/2004/08/addressing" xmlns:wsman="http://schemas.dmtf.org/wbem/wsman/1/wsman.xsd">
 <s:Header>
 <wsa:To>
 $endPoint
@@ -470,20 +506,25 @@ http://schemas.xmlsoap.org/ws/2004/08/addressing/role/anonymous
 <wsa:Action s:mustUnderstand="true">
 http://schemas.xmlsoap.org/ws/2004/09/transfer/Delete
 </wsa:Action>
-<wsman:MaxEnvelopeSize s:mustUnderstand="true">153600</wsman:MaxEnvelopeSize>
-<wsa:MessageID>$MessageID</wsa:MessageID>
+<wsman:MaxEnvelopeSize s:mustUnderstand="true">
+153600
+</wsman:MaxEnvelopeSize>
+<wsa:MessageID>
+$MessageID
+</wsa:MessageID>
 <wsman:Locale xml:lang="en-US" s:mustUnderstand="false" />
 <wsman:ResourceURI 
 xmlns:wsman="http://schemas.dmtf.org/wbem/wsman/1/wsman.xsd">
 http://schemas.microsoft.com/wbem/wsman/1/windows/shell/cmd
 </wsman:ResourceURI>
-<wsman:SelectorSet xmlns:wsman="http://schemas.dmtf.org/wbem/wsman/1/wsman.xsd"
-xmlns="http://schemas.dmtf.org/wbem/wsman/1/wsman.xsd">
+<wsman:SelectorSet xmlns:wsman="http://schemas.dmtf.org/wbem/wsman/1/wsman.xsd" xmlns="http://schemas.dmtf.org/wbem/wsman/1/wsman.xsd">
 <wsman:Selector Name="ShellId">
 $ShellId
 </wsman:Selector>
 </wsman:SelectorSet>
-<wsman:OperationTimeout>PT$timeout.000S</wsman:OperationTimeout>
+<wsman:OperationTimeout>
+PT$timeout.000S
+</wsman:OperationTimeout>
 </s:Header>
 <s:Body></s:Body>
 </s:Envelope>
